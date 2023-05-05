@@ -440,7 +440,7 @@ function PB.get_field(odom::OutputMemoryDomain, varname)
     fr = PALEOmodel.wrap_fieldrecord(
         vdata, field_data, Tuple(data_dims), missing, space, grid, attributes,
         coords_record=[
-            PB.FixedCoord(
+            PALEOmodel.RecordCoord(
                 String(odom.coords_record),
                 # df[!, odom.coords_record],
                 use_all_records ? df[!, odom.coords_record] : df[1:odom._nrecs, odom.coords_record],

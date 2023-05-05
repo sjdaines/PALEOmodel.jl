@@ -1,3 +1,20 @@
+mutable struct RecordCoord
+    name::String
+    values::Vector{Float64}
+    attributes::Dict{Symbol, Any}
+end
+
+
+
+function get_region(fc::RecordCoord, indices::AbstractVector)
+    return FixedCoord(fc.name, fc.values[indices], fc.attributes)
+end
+
+function get_region(fcv::Vector{RecordCoord}, indices::AbstractVector)
+    return [RecordCoord(fc.name, fc.values[indices], fc.attributes) for fc in fcv]
+end
+
+
 """
     FieldRecord{D <: AbstractData, S <: AbstractSpace, V, N, M, R}
     FieldRecord(
@@ -17,15 +34,17 @@ Fields with single `values` (`field_single_element` true) are stored as a Vector
 struct FieldRecord{D <: PB.AbstractData, S <: PB.AbstractSpace, V, N, M, R}
     records::Vector{R}
     data_dims::NTuple{N, PB.NamedDimension}
+    record_dim::PB.NamedDimension
     mesh::M
+    coords::Vector{FieldArray}
     attributes::Dict{Symbol, Any}
-    coords_record::Vector{PB.FixedCoord} # coordinates attached to record dimension
+    # coords_record::Vector{RecordCoord} # coordinates attached to record dimension
 end
 
 function Base.show(io::IO, fr::FieldRecord)
     print(io, 
-        "FieldRecord(eltype=", eltype(fr),", length=", length(fr), 
-        ", attributes=", fr.attributes, ", coords_record=", fr.coords_record, ")"
+        "FieldRecord(eltype=", eltype(fr),", length=", length(fr), ", record_dim=", fr.record_dim, 
+        ", attributes=", fr.attributes, ")"
     )
 end
 
@@ -223,7 +242,7 @@ function _get_array(
             # find ridx corresponding to a coordinate
             for cr in fr.coords_record
                 if String(k) == cr.name
-                    ridx, cvalue = PB.find_indices(cr.values, v)
+                    ridx, cvalue = find_indices(cr.values, v)
                     selectargs_records=NamedTuple((k=>cvalue,))
                 end
             end            
@@ -231,7 +250,8 @@ function _get_array(
             selectargs_region = merge(selectargs_region, NamedTuple((k=>v,)))
         end
     end
-    records_dim = PB.NamedDimension("records", length(ridx), PB.get_region(fr.coords_record, ridx))
+    records_coord = 
+    records_dim = PB.NamedDimension("records", length(ridx), get_region(fr.coords_record, ridx))
 
     # add attributes for selection used
     attributes = copy(fr.attributes)
@@ -312,3 +332,28 @@ function _get_array(
 
 end
 
+"find indices of coord from first before range[1] to first after range[2]"
+function find_indices(coord::AbstractVector, range)
+    length(range) == 2 ||
+        throw(ArgumentError("find_indices: length(range) != 2  $range"))
+
+    idxstart = findlast(t -> t<=range[1], coord)
+    isnothing(idxstart) && (idxstart = 1)
+
+    idxend = findfirst(t -> t>=range[2], coord)
+    isnothing(idxend) && (idxend = length(coord))
+
+    return idxstart:idxend, (coord[idxstart], coord[idxend])
+end
+
+"find indices of coord nearest val"
+function find_indices(coord::AbstractVector, val::Real)
+    idx = 1
+    for i in 1:length(coord)
+        if abs(coord[i] - val) < abs(coord[idx] - val)
+            idx = i
+        end
+    end
+
+    return [idx], coord[idx]
+end

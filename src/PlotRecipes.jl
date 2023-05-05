@@ -364,6 +364,12 @@ RecipesBase.@recipe function f(
         end
     end
 
+    # guess coordinate edges from midpoints, assuming uniform spacing
+    function guess_coords_edges(x_midpoints)
+        first_x = x_midpoints[1] - 0.5*(x_midpoints[2] - x_midpoints[1])
+        last_x = x_midpoints[end] + 0.5*(x_midpoints[end] - x_midpoints[end-1])
+        return [first_x; 0.5.*(x_midpoints[1:end-1] .+ x_midpoints[2:end]); last_x]
+    end
 
     values = fa.values
     name = fa.name
@@ -386,20 +392,20 @@ RecipesBase.@recipe function f(
         else
             label --> labelprefix*name
         end
-        f_label = PB.append_units(get_attribute(fa, :var_name, ""), fa.attributes)
+        f_label = append_units(get_attribute(fa, :var_name, ""), fa.attributes)
         coords_vec = fa.dims[1].coords
 
         if length(coords_vec) == 1 || length(coords_vec) > 3
             co = first(coords_vec)            
             return swap_coords_values(
                 co.values, values,
-                PB.append_units(co.name, co.attributes), f_label,
+                append_units(co.name, co.attributes), f_label,
             )
             
         elseif length(coords_vec) in (2, 3)
             co_lower = coords_vec[end-1]
             co_upper = coords_vec[end]
-            c_label = PB.append_units(co_lower.name*", "*co_upper.name, co_lower.attributes)           
+            c_label = append_units(co_lower.name*", "*co_upper.name, co_lower.attributes)           
             return swap_coords_values(
                 create_stepped(co_lower.values, co_upper.values, values)...,
                 c_label, f_label,
@@ -412,19 +418,19 @@ RecipesBase.@recipe function f(
         end
 
     elseif length(fa.dims) == 2
-        title --> PB.append_units(fa.name, fa.attributes)        
+        title --> append_units(fa.name, fa.attributes)        
        
-        i_values, i_label = PB.build_coords_edges(fa.dims[1])
-        j_values, j_label = PB.build_coords_edges(fa.dims[2])
+        i_values, i_label = build_coords_edges(fa, fa.dims[1].name)
+        j_values, j_label = build_coords_edges(fa, fa.dims[2].name)
 
         # workaround for Plots.jl heatmap: needs x, y to either both be midpoints, or both be edges
         if length(i_values) == size(values, 1) && length(j_values) == size(values, 2)+1
             @warn "$(fa.name) guessing '$i_label' coordinate edges from midpoints assuming uniform spacing"
-            i_values = PB.guess_coords_edges(i_values)
+            i_values = guess_coords_edges(i_values)
         end
         if length(i_values) == size(values, 1)+1 && length(j_values) == size(values, 2)
             @warn "$(fa.name) guessing '$j_label' coordinate edges from midpoints assuming uniform spacing"
-            j_values = PB.guess_coords_edges(j_values)
+            j_values = guess_coords_edges(j_values)
         end
 
         x_values, y_values, f_values = swap_coords_xy(
@@ -527,3 +533,79 @@ function broadcast_dict(dv::Vector{<:Dict})
         return dvout
     end
 end
+
+"""
+    build_coords_edges(nd::NamedDimension) -> Vector{Float64}
+
+Call [`build_coords_edges`](@ref)(nd.coords), or fallback to just returning indices
+if no coords present.
+"""
+function build_coords_edges(nd::PB.NamedDimension)
+    if !isempty(nd.coords)
+        return build_coords_edges(nd.coords)
+    else
+        @warn "no coords for NamedDimension $(nd.name), returning indices"
+        return collect(1:nd.size), nd.name*" (indices)"
+    end
+end
+
+"""
+    build_coords_edges(coords_vec::Vector{FixedCoord}) -> Vector{Float64}
+
+Build a vector of coordinate edges (length `n+1``) from `coords_vec`, assuming the PALEO
+convention that `coords_vec` contains three elements with 
+cell midpoints, lower edges, upper edges each of length `n`, in that order.
+
+Falls back to just returning the first entry in `coords_vec` for other cases.
+"""
+function build_coords_edges(fa::FieldArray, dimname::AbstractString)
+    
+    coords_vec = get_coord_arrays(fa, dimname)
+
+    if isempty(coords_vec)
+        nd = get_dimension(fa, dimname)
+        @warn "no coords for dimension $(nd), returning indices"
+        return collect(1:nd.size), nd.name*" (indices)"
+    elseif length(coords_vec) == 1 || length(coords_vec) > 3
+        # 1 coordinate or something we don't understand - take first
+        co = first(coords_vec)
+        co_values = co.values
+        co_label = append_units(co.name, co.attributes)
+    elseif length(coords_vec) in (2, 3)
+        # 2 coordinates assume lower, upper edges
+        # 3 coordinates assume mid, lower, upper
+        co_lower = coords_vec[end-1]
+        co_upper = coords_vec[end]
+        co_label = append_units(co_lower.name*", "*co_upper.name, co_lower.attributes)
+        first(co_lower.values) < first(co_upper.values) ||
+            @warn "build_coords_edges: $co_label co_lower is > co_upper - check model grid"            
+        if co_lower.values[end] > co_lower.values[1] # ascending order
+            co_lower.values[2:end] == co_upper.values[1:end-1] ||
+                @warn "build_coords_edges: $co_label lower and upper edges don't match"
+            co_values = [co_lower.values; co_upper.values[end]]
+        else # descending order
+            co_lower.values[1:end-1] == co_upper.values[2:end] ||
+                @warn "build_coords_edges: $co_label lower and upper edges don't match"
+            co_values = [co_upper.values[1]; co_lower.values]
+        end
+
+    end
+
+    return co_values, co_label
+end
+
+"""
+    append_units(name::AbstractString, attributes) -> "name (units)"
+
+Utility function to append variable units string to a variable name for display.
+"""
+function append_units(name::AbstractString, attributes::Dict{Symbol, Any})
+    units = get(attributes, :units, "")
+    if isempty(units)
+        return name
+    else
+        return name*" ($units)"
+    end
+end
+
+append_units(name::AbstractString, attributes::Nothing) = name
